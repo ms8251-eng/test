@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>一窗山色｜照片上傳</title>
+  <style>
+    :root{--bg:#f5f2ea;--card:#fffdf8;--text:#2f3a34;--muted:#6c746f;--accent:#3f6654;--line:#d9ddd7}
+    *{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#eef3ee,#f7f2e8);font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif;color:var(--text)}
+    main{max-width:760px;margin:auto;padding:28px 18px 60px}.hero{text-align:center;padding:22px 0}.hero h1{font-size:30px;margin:0 0 8px}.hero p{margin:0;color:var(--muted)}
+    .card{background:rgba(255,253,248,.95);border:1px solid var(--line);border-radius:20px;padding:22px;margin:16px 0;box-shadow:0 10px 30px rgba(44,67,55,.08)}
+    label{display:block;font-weight:700;margin-bottom:8px}input[type=email],input[type=file]{width:100%;padding:13px;border:1px solid var(--line);border-radius:12px;background:white;font-size:16px}
+    button,a.btn{display:inline-block;border:0;border-radius:12px;padding:12px 18px;background:var(--accent);color:white;font-size:16px;text-decoration:none;cursor:pointer;margin-top:12px}button.secondary{background:#7c8781}button:disabled{opacity:.55;cursor:not-allowed}
+    .status{margin-top:12px;white-space:pre-wrap;color:var(--muted)}.hidden{display:none}.result{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}.result img{width:100%;max-height:360px;object-fit:contain;border-radius:14px;background:#eef0ec}.url{word-break:break-all;background:#f0f3ef;padding:10px;border-radius:10px;font-size:13px;margin-top:8px}
+    .topbar{display:flex;justify-content:space-between;align-items:center;gap:10px}.small{font-size:13px;color:var(--muted)}
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <h1>一窗山色・照片上傳</h1>
+    <p>原圖直接存入 Supabase，完成後自動產生公開連結。</p>
+  </section>
+
+  <section id="loginCard" class="card">
+    <h2>先登入</h2>
+    <p class="small">輸入你的電子郵件，Supabase 會寄一封登入信。點信中的連結後，就能上傳照片。</p>
+    <label for="email">電子郵件</label>
+    <input id="email" type="email" autocomplete="email" placeholder="name@example.com" />
+    <button id="loginBtn">寄送登入連結</button>
+    <div id="loginStatus" class="status"></div>
+  </section>
+
+  <section id="uploadCard" class="card hidden">
+    <div class="topbar">
+      <div><strong>已登入</strong><div id="userEmail" class="small"></div></div>
+      <button id="logoutBtn" class="secondary">登出</button>
+    </div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+    <label for="files">選擇原始照片</label>
+    <input id="files" type="file" accept="image/jpeg,image/png,image/webp" multiple />
+    <button id="uploadBtn">開始上傳</button>
+    <div id="uploadStatus" class="status"></div>
+    <div id="results"></div>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  const SUPABASE_URL = 'https://jdidzzilagwqlilmevos.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_bNk37I2SErEjaaYAfuGiKg_xj15UjPA';
+  const BUCKET = 'website-images';
+  const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  const loginCard = document.getElementById('loginCard');
+  const uploadCard = document.getElementById('uploadCard');
+  const loginStatus = document.getElementById('loginStatus');
+  const uploadStatus = document.getElementById('uploadStatus');
+  const results = document.getElementById('results');
+
+  function safeName(name){
+    const dot = name.lastIndexOf('.');
+    const ext = dot >= 0 ? name.slice(dot).toLowerCase() : '';
+    const base = (dot >= 0 ? name.slice(0,dot) : name)
+      .normalize('NFKD').replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]+/g,'-').replace(/^-+|-+$/g,'') || 'photo';
+    return `${Date.now()}-${Math.random().toString(36).slice(2,8)}-${base}${ext}`;
+  }
+
+  async function refreshSession(){
+    const { data } = await client.auth.getSession();
+    const session = data.session;
+    loginCard.classList.toggle('hidden', !!session);
+    uploadCard.classList.toggle('hidden', !session);
+    document.getElementById('userEmail').textContent = session?.user?.email || '';
+  }
+
+  document.getElementById('loginBtn').addEventListener('click', async () => {
+    const email = document.getElementById('email').value.trim();
+    if(!email){ loginStatus.textContent='請先輸入電子郵件。'; return; }
+    loginStatus.textContent='正在寄送登入信…';
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options:{ emailRedirectTo: location.href.split('#')[0] }
+    });
+    loginStatus.textContent = error ? `寄送失敗：${error.message}` : '登入信已寄出，請到信箱點開連結。';
+  });
+
+  document.getElementById('logoutBtn').addEventListener('click', async () => {
+    await client.auth.signOut();
+    await refreshSession();
+  });
+
+  document.getElementById('uploadBtn').addEventListener('click', async () => {
+    const files = [...document.getElementById('files').files];
+    if(!files.length){ uploadStatus.textContent='請先選擇照片。'; return; }
+    uploadStatus.textContent=''; results.innerHTML='';
+    const button = document.getElementById('uploadBtn'); button.disabled=true;
+    let completed=0;
+    for(const file of files){
+      uploadStatus.textContent=`正在上傳 ${completed+1} / ${files.length}：${file.name}`;
+      const path = `originals/${new Date().toISOString().slice(0,10)}/${safeName(file.name)}`;
+      const { error } = await client.storage.from(BUCKET).upload(path,file,{cacheControl:'31536000',upsert:false,contentType:file.type});
+      if(error){
+        const div=document.createElement('div'); div.className='result'; div.textContent=`上傳失敗：${file.name}｜${error.message}`; results.appendChild(div);
+      }else{
+        const { data } = client.storage.from(BUCKET).getPublicUrl(path);
+        const url=data.publicUrl;
+        const div=document.createElement('div'); div.className='result';
+        div.innerHTML=`<img src="${url}" alt=""><div class="url">${url}</div><button type="button">複製連結</button>`;
+        div.querySelector('button').onclick=async()=>{await navigator.clipboard.writeText(url);div.querySelector('button').textContent='已複製';};
+        results.appendChild(div);
+      }
+      completed++;
+    }
+    uploadStatus.textContent=`完成：${completed} 張處理完畢。`;
+    button.disabled=false;
+  });
+
+  client.auth.onAuthStateChange(()=>refreshSession());
+  refreshSession();
+</script>
+</body>
+</html>
